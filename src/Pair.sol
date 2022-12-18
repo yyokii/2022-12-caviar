@@ -27,8 +27,16 @@ contract Pair is ERC20, ERC721TokenReceiver {
     Caviar public immutable caviar;
     uint256 public closeTimestamp;
 
-    event Add(uint256 baseTokenAmount, uint256 fractionalTokenAmount, uint256 lpTokenAmount);
-    event Remove(uint256 baseTokenAmount, uint256 fractionalTokenAmount, uint256 lpTokenAmount);
+    event Add(
+        uint256 baseTokenAmount,
+        uint256 fractionalTokenAmount,
+        uint256 lpTokenAmount
+    );
+    event Remove(
+        uint256 baseTokenAmount,
+        uint256 fractionalTokenAmount,
+        uint256 lpTokenAmount
+    );
     event Buy(uint256 inputAmount, uint256 outputAmount);
     event Sell(uint256 inputAmount, uint256 outputAmount);
     event Wrap(uint256[] tokenIds);
@@ -43,7 +51,13 @@ contract Pair is ERC20, ERC721TokenReceiver {
         string memory pairSymbol,
         string memory nftName,
         string memory nftSymbol
-    ) ERC20(string.concat(nftName, " fractional token"), string.concat("f", nftSymbol), 18) {
+    )
+        ERC20(
+            string.concat(nftName, " fractional token"),
+            string.concat("f", nftSymbol),
+            18
+        )
+    {
         nft = _nft;
         baseToken = _baseToken; // use address(0) for native ETH
         merkleRoot = _merkleRoot;
@@ -55,151 +69,218 @@ contract Pair is ERC20, ERC721TokenReceiver {
     //      Core AMM logic      //
     // ***********************  //
 
-    /// @notice Adds liquidity to the pair.
-    /// @param baseTokenAmount The amount of base tokens to add.
-    /// @param fractionalTokenAmount The amount of fractional tokens to add.
-    /// @param minLpTokenAmount The minimum amount of LP tokens to mint.
-    /// @return lpTokenAmount The amount of LP tokens minted.
-    function add(uint256 baseTokenAmount, uint256 fractionalTokenAmount, uint256 minLpTokenAmount)
-        public
-        payable
-        returns (uint256 lpTokenAmount)
-    {
+    /// ペアに流動性を追加する関数
+    /// 引数 baseTokenAmount 追加するベーストークンの量
+    /// 引数 fractionalTokenAmount 追加するフラクショナルトークンの量
+    /// 引数 minLpTokenAmount ミントするLPトークンの最小量
+    /// 戻り値 lpTokenAmount ミントされたLPトークンの量
+    function add(
+        uint256 baseTokenAmount,
+        uint256 fractionalTokenAmount,
+        uint256 minLpTokenAmount
+    ) public payable returns (uint256 lpTokenAmount) {
         // *** Checks *** //
 
-        // check the token amount inputs are not zero
-        require(baseTokenAmount > 0 && fractionalTokenAmount > 0, "Input token amount is zero");
+        //引数のbaseTokenAmount、fractionalTokenAmountが0より大きければパス
+        require(
+            baseTokenAmount > 0 && fractionalTokenAmount > 0,
+            "Input token amount is zero"
+        );
 
-        // check that correct eth input was sent - if the baseToken equals address(0) then native ETH is used
-        require(baseToken == address(0) ? msg.value == baseTokenAmount : msg.value == 0, "Invalid ether input");
+        //ベーストークンがイーサなら
+        //引数のベーストークン量とmsg.valueが一緒であればパス
+        //ベーストークンがイーサでないなら
+        //msg.valueが0ならパス
+        require(
+            baseToken == address(0)
+                ? msg.value == baseTokenAmount
+                : msg.value == 0,
+            "Invalid ether input"
+        );
 
-        // calculate the lp token shares to mint
+        //ミントされるべきLPトークンの量をbaseTokenAmountとfractionalTokenAmountから算出
         lpTokenAmount = addQuote(baseTokenAmount, fractionalTokenAmount);
 
-        // check that the amount of lp tokens outputted is greater than the min amount
-        require(lpTokenAmount >= minLpTokenAmount, "Slippage: lp token amount out");
+        //上で算出されたlpTokenAmountが、引数のminLpTokenAmount以上ならパス
+        require(
+            lpTokenAmount >= minLpTokenAmount,
+            "Slippage: lp token amount out"
+        );
 
         // *** Effects *** //
 
-        // transfer fractional tokens in
+        //フラクショナルトークンをこのコントラクトからLP（流動性提供者）に送信
         _transferFrom(msg.sender, address(this), fractionalTokenAmount);
 
         // *** Interactions *** //
 
-        // mint lp tokens to sender
+        //LPにLPトークンをミントする
         lpToken.mint(msg.sender, lpTokenAmount);
 
-        // transfer base tokens in if the base token is not ETH
+        // ベーストークンがイーサでないなら
+        // LPのベーストークンを、このコントラクトに移す
         if (baseToken != address(0)) {
             // transfer base tokens in
-            ERC20(baseToken).safeTransferFrom(msg.sender, address(this), baseTokenAmount);
+            ERC20(baseToken).safeTransferFrom(
+                msg.sender,
+                address(this),
+                baseTokenAmount
+            );
         }
 
         emit Add(baseTokenAmount, fractionalTokenAmount, lpTokenAmount);
     }
 
-    /// @notice Removes liquidity from the pair.
-    /// @param lpTokenAmount The amount of LP tokens to burn.
-    /// @param minBaseTokenOutputAmount The minimum amount of base tokens to receive.
-    /// @param minFractionalTokenOutputAmount The minimum amount of fractional tokens to receive.
-    /// @return baseTokenOutputAmount The amount of base tokens received.
-    /// @return fractionalTokenOutputAmount The amount of fractional tokens received.
-    function remove(uint256 lpTokenAmount, uint256 minBaseTokenOutputAmount, uint256 minFractionalTokenOutputAmount)
+    /// ペアから流動性を削除する関数
+    /// 引数 lpTokenAmount バーンされるLPトークンの量
+    /// 引数 minBaseTokenOutputAmount 受け取るベーストークンの最小量
+    /// 引数 minFractionalTokenOutputAmount 受け取るフラクショナルトークンの最小量
+    /// 戻り値 baseTokenOutputAmount 受け取ったベーストークンの量
+    /// 戻り値 fractionalTokenOutputAmount 受け取ったフラクショナルトークンの量
+    function remove(
+        uint256 lpTokenAmount,
+        uint256 minBaseTokenOutputAmount,
+        uint256 minFractionalTokenOutputAmount
+    )
         public
-        returns (uint256 baseTokenOutputAmount, uint256 fractionalTokenOutputAmount)
+        returns (
+            uint256 baseTokenOutputAmount,
+            uint256 fractionalTokenOutputAmount
+        )
     {
         // *** Checks *** //
 
-        // calculate the output amounts
-        (baseTokenOutputAmount, fractionalTokenOutputAmount) = removeQuote(lpTokenAmount);
+        //LPに返されるベーストークンとフラクショナルトークンの量を、LPトークンの量から算出
+        (baseTokenOutputAmount, fractionalTokenOutputAmount) = removeQuote(
+            lpTokenAmount
+        );
 
-        // check that the base token output amount is greater than the min amount
-        require(baseTokenOutputAmount >= minBaseTokenOutputAmount, "Slippage: base token amount out");
+        //上で算出された返されるベーストークンの量が、引数のminBaseTokenOutputAmount以上ならパス
+        require(
+            baseTokenOutputAmount >= minBaseTokenOutputAmount,
+            "Slippage: base token amount out"
+        );
 
-        // check that the fractional token output amount is greater than the min amount
-        require(fractionalTokenOutputAmount >= minFractionalTokenOutputAmount, "Slippage: fractional token out");
+        //上で算出された返されるフラクショナルトークンの量が、引数のminFractionalTokenOutputAmount以上ならパス
+        require(
+            fractionalTokenOutputAmount >= minFractionalTokenOutputAmount,
+            "Slippage: fractional token out"
+        );
 
         // *** Effects *** //
 
-        // transfer fractional tokens to sender
+        // LPにこのコントラクトからフラクショナルトークンを送信
         _transferFrom(address(this), msg.sender, fractionalTokenOutputAmount);
 
         // *** Interactions *** //
 
-        // burn lp tokens from sender
+        //LPのLPトークンをバーンする
         lpToken.burn(msg.sender, lpTokenAmount);
 
+        //ベーストークンがイーサなら
         if (baseToken == address(0)) {
-            // if base token is native ETH then send ether to sender
+            //LPにイーサを送信
             msg.sender.safeTransferETH(baseTokenOutputAmount);
+            //ベーストークンがERC20なら
         } else {
-            // transfer base tokens to sender
+            //LPにERC20を送信
             ERC20(baseToken).safeTransfer(msg.sender, baseTokenOutputAmount);
         }
 
-        emit Remove(baseTokenOutputAmount, fractionalTokenOutputAmount, lpTokenAmount);
+        emit Remove(
+            baseTokenOutputAmount,
+            fractionalTokenOutputAmount,
+            lpTokenAmount
+        );
     }
 
-    /// @notice Buys fractional tokens from the pair.
-    /// @param outputAmount The amount of fractional tokens to buy.
-    /// @param maxInputAmount The maximum amount of base tokens to spend.
-    /// @return inputAmount The amount of base tokens spent.
-    function buy(uint256 outputAmount, uint256 maxInputAmount) public payable returns (uint256 inputAmount) {
+    /// ペアからフラクショナルトークンを買う関数
+    /// 引数 outputAmount 買うフラクショナルトークンの量
+    /// 引数 maxInputAmount 送るベーストークンの最大量
+    /// 戻り値 inputAmount 送ったベーストークンの量
+    function buy(uint256 outputAmount, uint256 maxInputAmount)
+        public
+        payable
+        returns (uint256 inputAmount)
+    {
         // *** Checks *** //
 
-        // check that correct eth input was sent - if the baseToken equals address(0) then native ETH is used
-        require(baseToken == address(0) ? msg.value == maxInputAmount : msg.value == 0, "Invalid ether input");
+        //ベーストークンがイーサなら
+        //msg.valueと引数のmaxInputAmountが一緒であればパス
+        //ベーストークンがERC20なら
+        //msg.valueが0であればパス
+        require(
+            baseToken == address(0)
+                ? msg.value == maxInputAmount
+                : msg.value == 0,
+            "Invalid ether input"
+        );
 
-        // calculate required input amount using xyk invariant
+        //引数のoutputAmountで指定された量のフラクショナルトークンを買うのに必要なベーストークンを算出
+        //計算式は、k(不変量) = x*y
         inputAmount = buyQuote(outputAmount);
 
-        // check that the required amount of base tokens is less than the max amount
+        //上で算出されたinputAmountが、maxInputAmount以下ならパス
         require(inputAmount <= maxInputAmount, "Slippage: amount in");
 
         // *** Effects *** //
 
-        // transfer fractional tokens to sender
+        //買い手にこのコントラクトからフラクショナルトークンを送信
         _transferFrom(address(this), msg.sender, outputAmount);
 
         // *** Interactions *** //
 
+        //ベーストークンがイーサなら
         if (baseToken == address(0)) {
-            // refund surplus eth
+            //余りを返す
+            //maxInputAmount - inputAmountで返却するイーサを算出
             uint256 refundAmount = maxInputAmount - inputAmount;
+            //上の式の解が0より大きければ、余ったイーサを買い手に返却
             if (refundAmount > 0) msg.sender.safeTransferETH(refundAmount);
+            //ベーストークンがERC20なら
         } else {
-            // transfer base tokens in
-            ERC20(baseToken).safeTransferFrom(msg.sender, address(this), inputAmount);
+            //買い手のベーストークンをこのコントラクトに移す
+            ERC20(baseToken).safeTransferFrom(
+                msg.sender,
+                address(this),
+                inputAmount
+            );
         }
 
         emit Buy(inputAmount, outputAmount);
     }
 
-    /// @notice Sells fractional tokens to the pair.
-    /// @param inputAmount The amount of fractional tokens to sell.
-    /// @param minOutputAmount The minimum amount of base tokens to receive.
-    /// @return outputAmount The amount of base tokens received.
-    function sell(uint256 inputAmount, uint256 minOutputAmount) public returns (uint256 outputAmount) {
+    /// ペアにフラクショナルトークンを売る関数
+    /// 引数 inputAmount 売るフラクショナルトークンの量
+    /// 引数 minOutputAmount 受け取るベーストークンの最小量
+    /// 戻り値 outputAmount 受け取ったベーストークンの量
+    function sell(uint256 inputAmount, uint256 minOutputAmount)
+        public
+        returns (uint256 outputAmount)
+    {
         // *** Checks *** //
 
-        // calculate output amount using xyk invariant
+        //売られるフラクショナルトークンの量からベーストークンの量をk(不変量)=x*yで算出
         outputAmount = sellQuote(inputAmount);
 
-        // check that the outputted amount of fractional tokens is greater than the min amount
+        //上で算出されたベーストークンの量が引数のminOutputAmount以上ならパス
         require(outputAmount >= minOutputAmount, "Slippage: amount out");
 
         // *** Effects *** //
 
-        // transfer fractional tokens from sender
+        //売り手からこのコントラクトにフラクショナルトークンを移す
         _transferFrom(msg.sender, address(this), inputAmount);
 
         // *** Interactions *** //
 
+        //ベーストークンがイーサなら
         if (baseToken == address(0)) {
-            // transfer ether out
+            //売り手にイーサを送信
             msg.sender.safeTransferETH(outputAmount);
+            //ベーストークンがERC20なら
         } else {
             // transfer base tokens out
+            //売り手にERC20を送信
             ERC20(baseToken).safeTransfer(msg.sender, outputAmount);
         }
 
@@ -210,53 +291,66 @@ contract Pair is ERC20, ERC721TokenReceiver {
     //      Wrap logic      //
     // ******************** //
 
-    /// @notice Wraps NFTs into fractional tokens.
-    /// @param tokenIds The ids of the NFTs to wrap.
-    /// @param proofs The merkle proofs for the NFTs proving that they can be used in the pair.
-    /// @return fractionalTokenAmount The amount of fractional tokens minted.
+    /// NFTをフラクショナルトークンにラップする関数
+    /// 引数 tokenIds ラップするNFTのID
+    /// 引数 proofs ペアで使用することができることを示しているNFTのマークルプルーフ
+    /// 戻り値 fractionalTokenAmount ミントされたフラクショナルトークンの量
     function wrap(uint256[] calldata tokenIds, bytes32[][] calldata proofs)
         public
         returns (uint256 fractionalTokenAmount)
     {
         // *** Checks *** //
 
-        // check that wrapping is not closed
+        //ペアのプールが閉じられていなければパス
         require(closeTimestamp == 0, "Wrap: closed");
 
-        // check the tokens exist in the merkle root
+        //マークルルートの中に当該NFTがあればパス
         _validateTokenIds(tokenIds, proofs);
 
         // *** Effects *** //
 
-        // mint fractional tokens to sender
+        //ラップされるNFTの数 × 1をミントされるフラクショナルトークンの量として算出
         fractionalTokenAmount = tokenIds.length * ONE;
+        //上で算出されたフラクショナルトークンをLPにミントする
         _mint(msg.sender, fractionalTokenAmount);
 
         // *** Interactions *** //
 
-        // transfer nfts from sender
+        //LPからこのコントラクトにNFTを移す（NFTの数だけ）
         for (uint256 i = 0; i < tokenIds.length; i++) {
-            ERC721(nft).safeTransferFrom(msg.sender, address(this), tokenIds[i]);
+            ERC721(nft).safeTransferFrom(
+                msg.sender,
+                address(this),
+                tokenIds[i]
+            );
         }
 
         emit Wrap(tokenIds);
     }
 
-    /// @notice Unwraps fractional tokens into NFTs.
-    /// @param tokenIds The ids of the NFTs to unwrap.
-    /// @return fractionalTokenAmount The amount of fractional tokens burned.
-    function unwrap(uint256[] calldata tokenIds) public returns (uint256 fractionalTokenAmount) {
+    /// NFTのラップを解除してフラクショナルトークンをNFTに戻す関数
+    /// 引数 tokenIds ラップが解除されるNFTのID
+    /// 戻り値 fractionalTokenAmount バーンされるフラクショナルトークンの量
+    function unwrap(uint256[] calldata tokenIds)
+        public
+        returns (uint256 fractionalTokenAmount)
+    {
         // *** Effects *** //
 
-        // burn fractional tokens from sender
+        //バーンされるフラクショナルトークンの量を、NFTの数 × 1として算出
         fractionalTokenAmount = tokenIds.length * ONE;
+        //上で算出されたフラクショナルトークンの量をバーン
         _burn(msg.sender, fractionalTokenAmount);
 
         // *** Interactions *** //
 
-        // transfer nfts to sender
+        //LPにNFTを返却（NFTの数だけ）
         for (uint256 i = 0; i < tokenIds.length; i++) {
-            ERC721(nft).safeTransferFrom(address(this), msg.sender, tokenIds[i]);
+            ERC721(nft).safeTransferFrom(
+                address(this),
+                msg.sender,
+                tokenIds[i]
+            );
         }
 
         emit Unwrap(tokenIds);
@@ -266,68 +360,90 @@ contract Pair is ERC20, ERC721TokenReceiver {
     //      NFT AMM logic      //
     // *********************** //
 
-    /// @notice nftAdd Adds liquidity to the pair using NFTs.
-    /// @param baseTokenAmount The amount of base tokens to add.
-    /// @param tokenIds The ids of the NFTs to add.
-    /// @param minLpTokenAmount The minimum amount of lp tokens to receive.
-    /// @param proofs The merkle proofs for the NFTs.
-    /// @return lpTokenAmount The amount of lp tokens minted.
+    /// nftAdd ペアに流動性を追加する（プールにベーストークンとNFTを入れる）関数
+    /// 引数 baseTokenAmount ペアに入れるベーストークンの量
+    /// 引数 tokenIds ペアに入れるNFTのID
+    /// 引数 minLpTokenAmount LPが受け取るLPトークンの最小量
+    /// 引数 proofs NFTのマークルプルーフ
+    /// 戻り値 lpTokenAmount ミントされるLPトークンの量
     function nftAdd(
         uint256 baseTokenAmount,
         uint256[] calldata tokenIds,
         uint256 minLpTokenAmount,
         bytes32[][] calldata proofs
     ) public payable returns (uint256 lpTokenAmount) {
-        // wrap the incoming NFTs into fractional tokens
+        //NFTをラップしてフラクショナルトークンをミントする。ミントしたトークンの量をfractionalTokenAmountに代入
         uint256 fractionalTokenAmount = wrap(tokenIds, proofs);
 
-        // add liquidity using the fractional tokens and base tokens
-        lpTokenAmount = add(baseTokenAmount, fractionalTokenAmount, minLpTokenAmount);
+        //ベーストークンとフラクショナルトークンの量からLPトークンを算出して返り値に入れる
+        lpTokenAmount = add(
+            baseTokenAmount,
+            fractionalTokenAmount,
+            minLpTokenAmount
+        );
     }
 
-    /// @notice Removes liquidity from the pair using NFTs.
-    /// @param lpTokenAmount The amount of lp tokens to remove.
-    /// @param minBaseTokenOutputAmount The minimum amount of base tokens to receive.
-    /// @param tokenIds The ids of the NFTs to remove.
-    /// @return baseTokenOutputAmount The amount of base tokens received.
-    /// @return fractionalTokenOutputAmount The amount of fractional tokens received.
-    function nftRemove(uint256 lpTokenAmount, uint256 minBaseTokenOutputAmount, uint256[] calldata tokenIds)
+    /// Removes ペアから流動性を取り除く関数
+    /// 引数 lpTokenAmount 取り除くLPトークンの量
+    /// 引数 minBaseTokenOutputAmount LPが受け取るベーストークンの最小量
+    /// 引数 tokenIds ペアから取り除くNFTのID
+    /// 戻り値 baseTokenOutputAmount LPが受け取ったベーストークンの量
+    /// 戻り値 fractionalTokenOutputAmount LPが受け取ったフラクショナルトークンの量
+    function nftRemove(
+        uint256 lpTokenAmount,
+        uint256 minBaseTokenOutputAmount,
+        uint256[] calldata tokenIds
+    )
         public
-        returns (uint256 baseTokenOutputAmount, uint256 fractionalTokenOutputAmount)
+        returns (
+            uint256 baseTokenOutputAmount,
+            uint256 fractionalTokenOutputAmount
+        )
     {
-        // remove liquidity and send fractional tokens and base tokens to sender
-        (baseTokenOutputAmount, fractionalTokenOutputAmount) =
-            remove(lpTokenAmount, minBaseTokenOutputAmount, tokenIds.length * ONE);
+        //流動性を取り除いて、LPにフラクショナルトークンとベーストークンを送信
+        (baseTokenOutputAmount, fractionalTokenOutputAmount) = remove(
+            lpTokenAmount,
+            minBaseTokenOutputAmount,
+            tokenIds.length * ONE
+        );
 
-        // unwrap the fractional tokens into NFTs and send to sender
+        //フラクショナルトークンをアンラップしてNFTにし、そのNFTをLPに返却する
         unwrap(tokenIds);
     }
 
-    /// @notice Buys NFTs from the pair using base tokens.
-    /// @param tokenIds The ids of the NFTs to buy.
-    /// @param maxInputAmount The maximum amount of base tokens to spend.
-    /// @return inputAmount The amount of base tokens spent.
-    function nftBuy(uint256[] calldata tokenIds, uint256 maxInputAmount) public payable returns (uint256 inputAmount) {
-        // buy fractional tokens using base tokens
+    /// ベーストークンを使用して、ペアからNFTを買う関数
+    /// 引数 tokenIds 買うNFTのID
+    /// 引数 maxInputAmount 買い手が送るベーストークンの最大量
+    /// 戻り値 inputAmount 買い手が送ったベーストークンの量
+    function nftBuy(uint256[] calldata tokenIds, uint256 maxInputAmount)
+        public
+        payable
+        returns (uint256 inputAmount)
+    {
+        //ベーストークンでフラクショナルトークンを買う
         inputAmount = buy(tokenIds.length * ONE, maxInputAmount);
 
         // unwrap the fractional tokens into NFTs and send to sender
+        // フラクショナルトークンをアンラップしてNFTにし、買い手にそのNFTを送る
         unwrap(tokenIds);
     }
 
-    /// @notice Sells NFTs to the pair for base tokens.
-    /// @param tokenIds The ids of the NFTs to sell.
-    /// @param minOutputAmount The minimum amount of base tokens to receive.
-    /// @param proofs The merkle proofs for the NFTs.
-    /// @return outputAmount The amount of base tokens received.
-    function nftSell(uint256[] calldata tokenIds, uint256 minOutputAmount, bytes32[][] calldata proofs)
-        public
-        returns (uint256 outputAmount)
-    {
-        // wrap the incoming NFTs into fractional tokens
+    /// ベーストークンのペアにNFTを売る関数
+    /// 引数 tokenIds 売り手が売るNFTのID
+    /// 引数 minOutputAmount 売り手が受け取るベーストークンの最小量
+    /// 引数 proofs 売られるNFTのマークルプルーフ
+    /// 戻り値 outputAmount 売り手が受け取ったベーストークンの量
+    function nftSell(
+        uint256[] calldata tokenIds,
+        uint256 minOutputAmount,
+        bytes32[][] calldata proofs
+    ) public returns (uint256 outputAmount) {
+        //NFTをラップしてフラクショナルトークンにする
         uint256 inputAmount = wrap(tokenIds, proofs);
 
         // sell fractional tokens for base tokens
+        //ベーストークンに対するフラクショナルトークンを売り手に送る？
+        //ベーストークンを売り手に送るんじゃない？
         outputAmount = sell(inputAmount, minOutputAmount);
     }
 
@@ -335,38 +451,38 @@ contract Pair is ERC20, ERC721TokenReceiver {
     //      Emergency exit logic      //
     // ****************************** //
 
-    /// @notice Closes the pair to new wraps.
-    /// @dev Can only be called by the caviar owner. This is used as an emergency exit in case
-    ///      the caviar owner suspects that the pair has been compromised.
+    /// ラップをするためのペアを閉じる関数
+    /// キャビアオーナーのみ実行可能。
+    //フラクショナルトークンの供給量が1に満たなくなり、オーナーがそれを妥当とした場合、
+    //オーナーによってペアは閉じられる
     function close() public {
-        // check that the sender is the caviar owner
+        //関数の呼び出しがオーナーならパス
         require(caviar.owner() == msg.sender, "Close: not owner");
 
-        // set the close timestamp with a grace period
+        //現時刻に1週間を加算して、closeTimestampに記録
         closeTimestamp = block.timestamp + CLOSE_GRACE_PERIOD;
 
-        // remove the pair from the Caviar contract
+        //キャビアコントラクトからペアを削除（マッピングをdelete）
         caviar.destroy(nft, baseToken, merkleRoot);
 
         emit Close(closeTimestamp);
     }
 
-    /// @notice Withdraws a particular NFT from the pair.
-    /// @dev Can only be called by the caviar owner after the close grace period has passed. This
-    ///      is used to auction off the NFTs in the pair in case NFTs get stuck due to liquidity
-    ///      imbalances. Proceeds from the auction should be distributed pro rata to fractional
-    ///      token holders. See documentation for more details.
+    /// ペアから特定のNFTを引き出す関数
+    /// ペアが閉じられてから一週間後に、キャビアオーナーのみ実行可能。
+    //流動性の均衡が破れたことでペア内にスタックしてしまったNFTをオークションに出品する際に使用される
+    //オークションからの収益は、フラクショナルトークン保有者に比例分配される
     function withdraw(uint256 tokenId) public {
-        // check that the sender is the caviar owner
+        //関数の呼び出しがキャビアオーナーならパス
         require(caviar.owner() == msg.sender, "Withdraw: not owner");
 
-        // check that the close period has been set
+        //closeTimestampが設定されていればパス（0でなければ設定済み）
         require(closeTimestamp != 0, "Withdraw not initiated");
 
-        // check that the close grace period has passed
+        //ペアが閉じられてから一週間以上が経過していればパス
         require(block.timestamp >= closeTimestamp, "Not withdrawable yet");
 
-        // transfer the nft to the caviar owner
+        //当該NFTをこのコントラクトからオーナーに送る
         ERC721(nft).safeTransferFrom(address(this), msg.sender, tokenId);
 
         emit Withdraw(tokenId);
@@ -384,58 +500,77 @@ contract Pair is ERC20, ERC721TokenReceiver {
         return balanceOf[address(this)];
     }
 
-    /// @notice The current price of one fractional token in base tokens with 18 decimals of precision.
-    /// @dev Calculated by dividing the base token reserves by the fractional token reserves.
-    /// @return price The price of one fractional token in base tokens * 1e18.
+    /// 1フラクショナルトークンあたりのベーストークンの直近の価格（小数点以下18桁まで）を求める関数
+    //ベーストークンの最低価格をフラクショナルトークンの最低価格で割って算出
+    /// 戻り値 price 除算したものに1e18を掛けて、返す
     function price() public view returns (uint256) {
         return (_baseTokenReserves() * ONE) / fractionalTokenReserves();
     }
 
-    /// @notice The amount of base tokens required to buy a given amount of fractional tokens.
-    /// @dev Calculated using the xyk invariant and a 30bps fee.
-    /// @param outputAmount The amount of fractional tokens to buy.
-    /// @return inputAmount The amount of base tokens required.
+    /// 指定された量のフラクショナルトークンを買うのに必要なベーストークンを算出する関数
+    //計算にはxykの等式と3%の手数料が使われる
+    /// 引数 outputAmount 買うフラクショナルトークンの量
+    /// 戻り値 inputAmount 必要なベーストークンの量
     function buyQuote(uint256 outputAmount) public view returns (uint256) {
-        return (outputAmount * 1000 * baseTokenReserves()) / ((fractionalTokenReserves() - outputAmount) * 997);
+        return
+            (outputAmount * 1000 * baseTokenReserves()) /
+            ((fractionalTokenReserves() - outputAmount) * 997);
     }
 
-    /// @notice The amount of base tokens received for selling a given amount of fractional tokens.
-    /// @dev Calculated using the xyk invariant and a 30bps fee.
-    /// @param inputAmount The amount of fractional tokens to sell.
-    /// @return outputAmount The amount of base tokens received.
+    /// 指定された量のフラクショナルトークンを売るために受け取ったベーストークンの量を算出する関数
+    //計算にはxykの等式と3%の手数料が使われる
+    /// 引数 inputAmount 売るフラクショナルトークンの量
+    /// 戻り値 outputAmount 受け取ったベーストークンの量
     function sellQuote(uint256 inputAmount) public view returns (uint256) {
         uint256 inputAmountWithFee = inputAmount * 997;
-        return (inputAmountWithFee * baseTokenReserves()) / ((fractionalTokenReserves() * 1000) + inputAmountWithFee);
+        return
+            (inputAmountWithFee * baseTokenReserves()) /
+            ((fractionalTokenReserves() * 1000) + inputAmountWithFee);
     }
 
-    /// @notice The amount of lp tokens received for adding a given amount of base tokens and fractional tokens.
-    /// @dev Calculated as a share of existing deposits. If there are no existing deposits, then initializes to
-    ///      sqrt(baseTokenAmount * fractionalTokenAmount).
-    /// @param baseTokenAmount The amount of base tokens to add.
-    /// @param fractionalTokenAmount The amount of fractional tokens to add.
-    /// @return lpTokenAmount The amount of lp tokens received.
-    function addQuote(uint256 baseTokenAmount, uint256 fractionalTokenAmount) public view returns (uint256) {
+    /// 指定されたベーストークンとフラクショナルトークンの量からLPが受け取るLPトークンの量を算出する関数
+    //計算は、存在するデポジットの分け前として算出
+    //デポジットが存在していなければ、baseTokenAmount * fractionalTokenAmountの平方根を初期値とする。
+    /// 引数 baseTokenAmount 追加するベーストークンの量
+    /// 引数 fractionalTokenAmount 追加するフラクショナルトークンの量
+    /// 戻り値 lpTokenAmount ミントすべきLPトークンの量
+    function addQuote(uint256 baseTokenAmount, uint256 fractionalTokenAmount)
+        public
+        view
+        returns (uint256)
+    {
+        //LPトークンの総供給量
         uint256 lpTokenSupply = lpToken.totalSupply();
+        //LPトークンの総供給量が0より大きければ
         if (lpTokenSupply > 0) {
             // calculate amount of lp tokens as a fraction of existing reserves
-            uint256 baseTokenShare = (baseTokenAmount * lpTokenSupply) / baseTokenReserves();
-            uint256 fractionalTokenShare = (fractionalTokenAmount * lpTokenSupply) / fractionalTokenReserves();
+            uint256 baseTokenShare = (baseTokenAmount * lpTokenSupply) /
+                baseTokenReserves();
+            uint256 fractionalTokenShare = (fractionalTokenAmount *
+                lpTokenSupply) / fractionalTokenReserves();
             return Math.min(baseTokenShare, fractionalTokenShare);
+            //LPトークンがまだ供給されていなければ
         } else {
-            // if there is no liquidity then init
+            // baseTokenAmount * fractionalTokenAmountの平方根を初期値として返す
             return Math.sqrt(baseTokenAmount * fractionalTokenAmount);
         }
     }
 
-    /// @notice The amount of base tokens and fractional tokens received for burning a given amount of lp tokens.
-    /// @dev Calculated as a share of existing deposits.
-    /// @param lpTokenAmount The amount of lp tokens to burn.
-    /// @return baseTokenAmount The amount of base tokens received.
-    /// @return fractionalTokenAmount The amount of fractional tokens received.
-    function removeQuote(uint256 lpTokenAmount) public view returns (uint256, uint256) {
+    /// 指定された量のLPトークンをバーンして、LPが受け取るベーストークンとフラクショナルトークンの量を算出する関数
+    //計算は、存在するデポジットの分け前として算出
+    /// 引数 lpTokenAmount バーンするLPトークンの量
+    /// 戻り値 baseTokenAmount LPに返すべきベーストークンの量
+    /// 戻り値 fractionalTokenAmount LPに返すべきフラクショナルトークンの量
+    function removeQuote(uint256 lpTokenAmount)
+        public
+        view
+        returns (uint256, uint256)
+    {
         uint256 lpTokenSupply = lpToken.totalSupply();
-        uint256 baseTokenOutputAmount = (baseTokenReserves() * lpTokenAmount) / lpTokenSupply;
-        uint256 fractionalTokenOutputAmount = (fractionalTokenReserves() * lpTokenAmount) / lpTokenSupply;
+        uint256 baseTokenOutputAmount = (baseTokenReserves() * lpTokenAmount) /
+            lpTokenSupply;
+        uint256 fractionalTokenOutputAmount = (fractionalTokenReserves() *
+            lpTokenAmount) / lpTokenSupply;
 
         return (baseTokenOutputAmount, fractionalTokenOutputAmount);
     }
@@ -444,7 +579,11 @@ contract Pair is ERC20, ERC721TokenReceiver {
     //      Internal utils      //
     // ************************ //
 
-    function _transferFrom(address from, address to, uint256 amount) internal returns (bool) {
+    function _transferFrom(
+        address from,
+        address to,
+        uint256 amount
+    ) internal returns (bool) {
         balanceOf[from] -= amount;
 
         // Cannot overflow because the sum of all user
@@ -458,25 +597,41 @@ contract Pair is ERC20, ERC721TokenReceiver {
         return true;
     }
 
-    /// @dev Validates that the given tokenIds are valid for the contract's merkle root. Reverts
-    ///      if any of the tokenId proofs are invalid.
-    function _validateTokenIds(uint256[] calldata tokenIds, bytes32[][] calldata proofs) internal view {
+    /// 指定されたNFTのIDが、コントラクトのマークルルートに存在するか検証する関数
+    //NFTのIDが存在しなかったら、元に戻す
+    function _validateTokenIds(
+        uint256[] calldata tokenIds,
+        bytes32[][] calldata proofs
+    ) internal view {
         // if merkle root is not set then all tokens are valid
+        //マークルルートが設定されてたらパス
         if (merkleRoot == bytes23(0)) return;
 
         // validate merkle proofs against merkle root
+        // ライブラリを使用して検証する
         for (uint256 i = 0; i < tokenIds.length; i++) {
-            bool isValid = MerkleProofLib.verify(proofs[i], merkleRoot, keccak256(abi.encodePacked(tokenIds[i])));
+            bool isValid = MerkleProofLib.verify(
+                proofs[i],
+                merkleRoot,
+                keccak256(abi.encodePacked(tokenIds[i]))
+            );
             require(isValid, "Invalid merkle proof");
         }
     }
 
-    /// @dev Returns the current base token reserves. If the base token is ETH then it ignores
-    ///      the msg.value that is being sent in the current call context - this is to ensure the
-    ///      xyk math is correct in the buy() and add() functions.
+    /// 直近のベーストークンの最低価格を返す関数
+    // ベーストークンがイーサなら、直近のコールコンテクスト（引数）で送られたmsg.valueは無視する。そのために差し引く。
+    // これにより、buy関数とadd関数で使用されるk=x*yの計算が担保される。
     function _baseTokenReserves() internal view returns (uint256) {
-        return baseToken == address(0)
-            ? address(this).balance - msg.value // subtract the msg.value if the base token is ETH
-            : ERC20(baseToken).balanceOf(address(this));
+        /*
+         ベーストークンがイーサなら
+         このコントラクトの残高からmsg.valueを差し引いて、返す
+         ベーストークンがERC20なら
+         このコントラクトのベーストークンの残高を返す
+         */
+        return
+            baseToken == address(0)
+                ? address(this).balance - msg.value // subtract the msg.value if the base token is ETH
+                : ERC20(baseToken).balanceOf(address(this));
     }
 }
