@@ -21,11 +21,11 @@ contract Pair is ERC20, ERC721TokenReceiver {
     uint256 public constant CLOSE_GRACE_PERIOD = 7 days;
 
     address public immutable nft;
-    address public immutable baseToken; // address(0) for ETH
-    bytes32 public immutable merkleRoot;
+    address public immutable baseToken; // address(0) for ETH、つまりETHを利用したいならaddress(0)を設定する
+    bytes32 public immutable merkleRoot; // @audit-ok 気になる、いつ決まる？、constructorで決まる
     LpToken public immutable lpToken;
     Caviar public immutable caviar;
-    uint256 public closeTimestamp;
+    uint256 public closeTimestamp; // @audit-ok 気になる
 
     event Add(
         uint256 baseTokenAmount,
@@ -69,6 +69,7 @@ contract Pair is ERC20, ERC721TokenReceiver {
     //      Core AMM logic      //
     // ***********************  //
 
+    // @audit-info 👀
     /// ペアに流動性を追加する関数
     /// 引数 baseTokenAmount 追加するベーストークンの量
     /// 引数 fractionalTokenAmount 追加するフラクショナルトークンの量
@@ -92,6 +93,7 @@ contract Pair is ERC20, ERC721TokenReceiver {
         //ベーストークンがイーサでないなら
         //msg.valueが0ならパス
         require(
+            // basetokenはconstructorで設定している
             baseToken == address(0)
                 ? msg.value == baseTokenAmount
                 : msg.value == 0,
@@ -109,11 +111,13 @@ contract Pair is ERC20, ERC721TokenReceiver {
 
         // *** Effects *** //
 
-        //フラクショナルトークンをこのコントラクトからLP（流動性提供者）に送信
+        // @audit これsenderのbalanceが0のときアンダーフローしない？
+        // senderからこのアドレスにfractionaltokenを送信する
         _transferFrom(msg.sender, address(this), fractionalTokenAmount);
 
         // *** Interactions *** //
 
+        // @audit-ok この辺りのmintやtransferはeffectなしでいいの？、mintはsolmateの中でbalanceOf[to] += amount;を実行している
         //LPにLPトークンをミントする
         lpToken.mint(msg.sender, lpTokenAmount);
 
@@ -194,6 +198,7 @@ contract Pair is ERC20, ERC721TokenReceiver {
         );
     }
 
+    // @audit-info 👀
     /// ペアからフラクショナルトークンを買う関数
     /// 引数 outputAmount 買うフラクショナルトークンの量
     /// 引数 maxInputAmount 送るベーストークンの最大量
@@ -230,15 +235,15 @@ contract Pair is ERC20, ERC721TokenReceiver {
 
         // *** Interactions *** //
 
-        //ベーストークンがイーサなら
         if (baseToken == address(0)) {
+            //ベーストークンがイーサなら
             //余りを返す
             //maxInputAmount - inputAmountで返却するイーサを算出
             uint256 refundAmount = maxInputAmount - inputAmount;
             //上の式の解が0より大きければ、余ったイーサを買い手に返却
             if (refundAmount > 0) msg.sender.safeTransferETH(refundAmount);
-            //ベーストークンがERC20なら
         } else {
+            //ベーストークンがERC20なら
             //買い手のベーストークンをこのコントラクトに移す
             ERC20(baseToken).safeTransferFrom(
                 msg.sender,
@@ -291,6 +296,7 @@ contract Pair is ERC20, ERC721TokenReceiver {
     //      Wrap logic      //
     // ******************** //
 
+    // @audit tokenIdsに同じIDのNFTが入っていないかチェックはいらない？
     /// NFTをフラクショナルトークンにラップする関数
     /// 引数 tokenIds ラップするNFTのID
     /// 引数 proofs ペアで使用することができることを示しているNFTのマークルプルーフ
@@ -301,6 +307,7 @@ contract Pair is ERC20, ERC721TokenReceiver {
     {
         // *** Checks *** //
 
+        // @audit これ他のところにも入れた方がいいチェックでは？
         //ペアのプールが閉じられていなければパス
         require(closeTimestamp == 0, "Wrap: closed");
 
@@ -328,6 +335,7 @@ contract Pair is ERC20, ERC721TokenReceiver {
         emit Wrap(tokenIds);
     }
 
+    // @audit-info 👀
     /// NFTのラップを解除してフラクショナルトークンをNFTに戻す関数
     /// 引数 tokenIds ラップが解除されるNFTのID
     /// 戻り値 fractionalTokenAmount バーンされるフラクショナルトークンの量
@@ -360,6 +368,7 @@ contract Pair is ERC20, ERC721TokenReceiver {
     //      NFT AMM logic      //
     // *********************** //
 
+    /// @audit-ok
     /// nftAdd ペアに流動性を追加する（プールにベーストークンとNFTを入れる）関数
     /// 引数 baseTokenAmount ペアに入れるベーストークンの量
     /// 引数 tokenIds ペアに入れるNFTのID
@@ -411,6 +420,7 @@ contract Pair is ERC20, ERC721TokenReceiver {
         unwrap(tokenIds);
     }
 
+    // @audit-info 👀
     /// ベーストークンを使用して、ペアからNFTを買う関数
     /// 引数 tokenIds 買うNFTのID
     /// 引数 maxInputAmount 買い手が送るベーストークンの最大量
@@ -598,13 +608,17 @@ contract Pair is ERC20, ERC721TokenReceiver {
     }
 
     /// 指定されたNFTのIDが、コントラクトのマークルルートに存在するか検証する関数
-    //NFTのIDが存在しなかったら、元に戻す
+    /// NFTのIDが存在しなかったら、元に戻す
     function _validateTokenIds(
         uint256[] calldata tokenIds,
         bytes32[][] calldata proofs
     ) internal view {
+        /*
+         @audit-ok 設定されてないケースはどんなとき？、これを他でデプロイして全てのトークン許容して悪用できそうだが？
+         まあでもこのコントラクトに問題があるわけではない
+        */
         // if merkle root is not set then all tokens are valid
-        //マークルルートが設定されてたらパス
+        // マークルルートが設定されてたらパス
         if (merkleRoot == bytes23(0)) return;
 
         // validate merkle proofs against merkle root
